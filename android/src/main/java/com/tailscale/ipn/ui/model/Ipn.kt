@@ -75,6 +75,7 @@ class Ipn {
       var HostName: String = "",
       var AutoUpdate: AutoUpdatePrefs? = AutoUpdatePrefs(true, true),
       var InternalExitNodePrior: String? = null,
+      var PerAppExitNode: Map<String, StableNodeID>? = null,
   ) {
 
     // For the InternalExitNodePrior and ExitNodeId, these will treats the empty string as null to
@@ -104,6 +105,7 @@ class Ipn {
       var AdvertiseRoutesSet: Boolean? = null,
       var ForceDaemonSet: Boolean? = null,
       var HostnameSet: Boolean? = null,
+      var PerAppExitNodeSet: Boolean? = null,
   ) {
 
     var ControlURL: String? = null
@@ -170,6 +172,12 @@ class Ipn {
       set(value) {
         field = value
         HostnameSet = true
+      }
+
+    var PerAppExitNode: Map<String, StableNodeID>? = null
+      set(value) {
+        field = value
+        PerAppExitNodeSet = true
       }
   }
 
@@ -257,5 +265,6 @@ fun Ipn.MaskedPrefs.deepCopy(): Ipn.MaskedPrefs {
     if (this.AdvertiseRoutesSet == true) it.AdvertiseRoutes = this.AdvertiseRoutes
     if (this.ForceDaemonSet == true) it.ForceDaemon = this.ForceDaemon
     if (this.HostnameSet == true) it.Hostname = this.Hostname
+    if (this.PerAppExitNodeSet == true) it.PerAppExitNode = this.PerAppExitNode
   }
 }

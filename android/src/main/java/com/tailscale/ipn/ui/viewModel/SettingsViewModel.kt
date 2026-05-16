@@ -18,6 +18,7 @@ data class SettingsNav(
     val onNavigateToAbout: () -> Unit,
     val onNavigateToDNSSettings: () -> Unit,
     val onNavigateToSplitTunneling: () -> Unit,
+    val onNavigateToPerAppExitNode: () -> Unit,
     val onNavigateToTailnetLock: () -> Unit,
     val onNavigateToSubnetRouting: () -> Unit,
     val onNavigateToMDMSettings: () -> Unit,

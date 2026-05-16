@@ -309,6 +309,17 @@
     <string name="an_unknown_error_occurred_please_try_again">An unknown error occurred. Please try again.</string>
     <string name="request_timed_out_make_sure_that_is_online">Request timed out. Make sure that \'%1$s\' is online.</string>
     <string name="split_tunneling">App split tunneling</string>
+    <string name="per_app_exit_node">Per-app exit nodes</string>
+    <string name="per_app_exit_node_subtitle">Route specific apps through a chosen exit node</string>
+    <string name="per_app_exit_node_description">Override the global exit node on a per-app basis. Apps without an override use the global exit node selection.</string>
+    <string name="per_app_use_global">Use global exit node</string>
+    <string name="per_app_no_exit_node">No exit node (drop exit traffic)</string>
+    <string name="per_app_count_overrides">Apps with overrides (%1$s)</string>
+    <string name="per_app_section_others">Other apps</string>
+    <string name="per_app_assigned_global">Uses global exit node</string>
+    <string name="per_app_assigned_none">Exit traffic dropped</string>
+    <string name="per_app_assigned_exit_node">Exit: %1$s</string>
+    <string name="per_app_search_hint">Search apps</string>
     <string name="your_current_selection_will_be_cleared">Your current selection will be cleared.</string>
     <string name="filter_apps_allowed_to_access_tailscale">Filter what apps are allowed to access Tailscale.</string>
     <string name="selected_apps_will_access_the_internet_directly_without_using_tailscale">Apps you select will access the internet without using Tailscale.</string>

@@ -37,7 +37,11 @@ android {
     defaultConfig {
         minSdkVersion 26
         targetSdkVersion 35
-        versionCode 468
+        // Bumped above any plausible upstream/Play-Store versionCode so this
+        // hobby fork can install over a Play Store install without forcing
+        // an uninstall (which would wipe Tailscale state). Restore to
+        // upstream's value if/when this fork is ever shipped officially.
+        versionCode 99999
         versionName getVersionProperty("VERSION_LONG")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

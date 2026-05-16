@@ -27,6 +27,7 @@ data class ExitNodePickerNav(
     val onNavigateBackToMullvad: () -> Unit,
     val onNavigateToMullvadCountry: (String) -> Unit,
     val onNavigateToRunAsExitNode: () -> Unit,
+    val onNavigateToPerAppExitNode: () -> Unit,
 )
 
 class ExitNodePickerViewModelFactory(private val nav: ExitNodePickerNav) :

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail"
+	"tailscale.com/net/connowner"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -232,6 +234,18 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				}
 				return nil
 			})
+			vpnSvc := s
+			connowner.SetLookupFunc(func(proto uint8, src, dst netip.AddrPort) (connowner.Owner, bool) {
+				pkg := vpnSvc.LookupPackageByFlow(
+					int32(proto),
+					src.Addr().String(), int32(src.Port()),
+					dst.Addr().String(), int32(dst.Port()),
+				)
+				if pkg == "" {
+					return connowner.Owner{}, false
+				}
+				return connowner.Owner{AppID: pkg}, true
+			})
 			log.Printf("onVPNRequested: rebind required")
 			// TODO(catzkorn): When we start the android application
 			// we bind sockets before we have access to the VpnService.protect()
@@ -258,6 +272,7 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				b.CloseTUNs()
 				netns.SetAndroidProtectFunc(nil)
 				netns.SetAndroidBindToNetworkFunc(nil)
+				connowner.SetLookupFunc(nil)
 				vpnService.service = nil
 			}
 		case i := <-onDNSConfigChanged:

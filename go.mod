@@ -8,6 +8,8 @@ require (
 	tailscale.com v1.99.0-pre.0.20260527224844-db60aa8eca34
 )
 
+replace tailscale.com => ../tailscale
+
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect

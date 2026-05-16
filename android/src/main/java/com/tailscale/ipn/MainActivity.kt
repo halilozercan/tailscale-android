@@ -87,6 +87,8 @@ import com.tailscale.ipn.ui.view.PrimaryActionButton
 import com.tailscale.ipn.ui.view.RunExitNodeView
 import com.tailscale.ipn.ui.view.SearchView
 import com.tailscale.ipn.ui.view.SettingsView
+import com.tailscale.ipn.ui.view.PerAppExitNodePickerView
+import com.tailscale.ipn.ui.view.PerAppExitNodeView
 import com.tailscale.ipn.ui.view.SplitTunnelAppPickerView
 import com.tailscale.ipn.ui.view.SubnetRoutingView
 import com.tailscale.ipn.ui.view.TaildropDirView
@@ -304,6 +306,9 @@ class MainActivity : ComponentActivity() {
                           onNavigateToAbout = { navController.navigate("about") },
                           onNavigateToDNSSettings = { navController.navigate("dnsSettings") },
                           onNavigateToSplitTunneling = { navController.navigate("splitTunneling") },
+                          onNavigateToPerAppExitNode = {
+                            navController.navigate("perAppExitNode")
+                          },
                           onNavigateToTailnetLock = { navController.navigate("tailnetLock") },
                           onNavigateToSubnetRouting = { navController.navigate("subnetRouting") },
                           onNavigateToMDMSettings = { navController.navigate("mdmSettings") },
@@ -322,7 +327,10 @@ class MainActivity : ComponentActivity() {
                           onNavigateToMullvadInfo = { navController.navigate("mullvad_info") },
                           onNavigateBackToMullvad = backTo("mullvad"),
                           onNavigateToMullvadCountry = { navController.navigate("mullvad/$it") },
-                          onNavigateToRunAsExitNode = { navController.navigate("runExitNode") })
+                          onNavigateToRunAsExitNode = { navController.navigate("runExitNode") },
+                          onNavigateToPerAppExitNode = {
+                            navController.navigate("perAppExitNode")
+                          })
                   val userSwitcherNav =
                       UserSwitcherNav(
                           backToSettings = backTo("settings"),
@@ -373,6 +381,21 @@ class MainActivity : ComponentActivity() {
                   composable("bugReport") { BugReportView(backTo("settings")) }
                   composable("dnsSettings") { DNSSettingsView(backTo("settings")) }
                   composable("splitTunneling") { SplitTunnelAppPickerView(backTo("settings")) }
+                  composable("perAppExitNode") {
+                    PerAppExitNodeView(
+                        backToSettings = backTo("settings"),
+                        onPickForApp = { pkg -> navController.navigate("perAppExitNode/$pkg") },
+                    )
+                  }
+                  composable(
+                      "perAppExitNode/{packageName}",
+                      arguments =
+                          listOf(navArgument("packageName") { type = NavType.StringType })) {
+                        PerAppExitNodePickerView(
+                            packageName = it.arguments!!.getString("packageName")!!,
+                            onBack = { navController.popBackStack() },
+                        )
+                      }
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
                   composable("about") { AboutView(backTo("settings")) }

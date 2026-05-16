@@ -99,6 +99,21 @@ type IPNService interface {
 	// socket was successfully protected.
 	Protect(fd int32) bool
 
+	// LookupPackageByFlow resolves an outbound flow's originating Android
+	// package name from its 5-tuple. Returns the empty string if the owner
+	// can't be determined (e.g. the flow already closed, or
+	// ConnectivityManager.getConnectionOwnerUid returned INVALID_UID).
+	//
+	// protocol is the IP protocol number (6=TCP, 17=UDP). srcAddr and
+	// dstAddr are formatted as IP literal strings (no port); ports are
+	// passed separately. This shape avoids gomobile string-parsing
+	// overhead on the Java side.
+	//
+	// Used to implement per-app exit-node selection: the Go side
+	// (LocalBackend.lookupPerAppExitNodePeer) consults this hook from
+	// the per-packet wireguard-go override.
+	LookupPackageByFlow(protocol int32, srcAddr string, srcPort int32, dstAddr string, dstPort int32) string
+
 	// NewBuilder creates a new VPNServiceBuilder in preparation for starting
 	// the Android VPN.
 	NewBuilder() VPNServiceBuilder

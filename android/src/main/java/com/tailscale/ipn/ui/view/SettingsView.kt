@@ -99,6 +99,12 @@ fun SettingsView(
               subtitle = stringResource(R.string.filter_apps_allowed_to_access_tailscale),
               onClick = settingsNav.onNavigateToSplitTunneling)
 
+          Lists.ItemDivider()
+          Setting.Text(
+              R.string.per_app_exit_node,
+              subtitle = stringResource(R.string.per_app_exit_node_subtitle),
+              onClick = settingsNav.onNavigateToPerAppExitNode)
+
           if (showTailnetLock.value == ShowHide.Show) {
             Lists.ItemDivider()
             Setting.Text(
@@ -278,5 +284,5 @@ fun SettingsPreview() {
   vm.tailNetLockEnabled.set(true)
   vm.isAdmin.set(true)
   vm.managedByOrganization.set("Tails and Scales Inc.")
-  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
+  SettingsView(SettingsNav({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}), vm)
 }

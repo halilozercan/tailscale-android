@@ -109,6 +109,11 @@ fun ExitNodePicker(
             }
           }
         }
+
+        item(key = "perAppExitNode") {
+          Lists.SectionDivider()
+          PerAppExitNodeItem(nav)
+        }
       }
     }
   }
@@ -186,6 +191,24 @@ fun MullvadInfoItem(nav: ExitNodePickerNav) {
         supportingContent = {
           Text(
               stringResource(R.string.enable_in_the_admin_console),
+              style = MaterialTheme.typography.bodyMedium)
+        })
+  }
+}
+
+@Composable
+fun PerAppExitNodeItem(nav: ExitNodePickerNav) {
+  Box {
+    ListItem(
+        modifier = Modifier.clickable { nav.onNavigateToPerAppExitNode() },
+        headlineContent = {
+          Text(
+              stringResource(R.string.per_app_exit_node),
+              style = MaterialTheme.typography.bodyMedium)
+        },
+        supportingContent = {
+          Text(
+              stringResource(R.string.per_app_exit_node_subtitle),
               style = MaterialTheme.typography.bodyMedium)
         })
   }
