@@ -22,12 +22,14 @@ public class IPNReceiver extends BroadcastReceiver {
 
     public static final String INTENT_CONNECT_VPN = "com.tailscale.ipn.CONNECT_VPN";
     public static final String INTENT_DISCONNECT_VPN = "com.tailscale.ipn.DISCONNECT_VPN";
+    public static final String INTENT_DISABLE_EXIT_NODE = "com.tailscale.ipn.DISABLE_EXIT_NODE";
     private static final String INTENT_USE_EXIT_NODE = "com.tailscale.ipn.USE_EXIT_NODE";
 
     // Unique work names prevent connect/disconnect flapping from enqueuing a long backlog.
     private static final String WORK_CONNECT = "ipn-connect-vpn";
     private static final String WORK_DISCONNECT = "ipn-disconnect-vpn";
     private static final String WORK_USE_EXIT_NODE = "ipn-use-exit-node";
+    private static final String WORK_DISABLE_EXIT_NODE = "ipn-disable-exit-node";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -53,6 +55,17 @@ public class IPNReceiver extends BroadcastReceiver {
                             .build();
 
             workManager.enqueueUniqueWork(WORK_DISCONNECT, ExistingWorkPolicy.REPLACE, req);
+
+        } else if (Objects.equals(action, INTENT_DISABLE_EXIT_NODE)) {
+            // Disable the active exit node while preserving the selection,
+            // matching the UI toggle so the user can re-enable from the picker.
+            OneTimeWorkRequest req =
+                    new OneTimeWorkRequest.Builder(DisableExitNodeWorker.class)
+                            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                            .addTag(WORK_DISABLE_EXIT_NODE)
+                            .build();
+
+            workManager.enqueueUniqueWork(WORK_DISABLE_EXIT_NODE, ExistingWorkPolicy.REPLACE, req);
 
         } else if (Objects.equals(action, INTENT_USE_EXIT_NODE)) {
             String exitNode = intent.getStringExtra("exitNode");

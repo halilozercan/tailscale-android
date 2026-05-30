@@ -702,6 +702,24 @@ open class UninitializedApp : Application() {
       builder.addAction(
           NotificationCompat.Action.Builder(0, actionLabel, pendingButtonIntent).build())
     }
+    if (vpnRunning &&
+        exitNodeName != null &&
+        MDMSettings.exitNodeID.flow.value.value.isNullOrEmpty()) {
+      val disableExitNodeIntent =
+          Intent(this, IPNReceiver::class.java).apply {
+            this.action = IPNReceiver.INTENT_DISABLE_EXIT_NODE
+          }
+      val pendingDisableExitNodeIntent: PendingIntent =
+          PendingIntent.getBroadcast(
+              this,
+              2,
+              disableExitNodeIntent,
+              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+      builder.addAction(
+          NotificationCompat.Action.Builder(
+                  0, getString(R.string.disable_exit_node), pendingDisableExitNodeIntent)
+              .build())
+    }
     return builder.build()
   }
 

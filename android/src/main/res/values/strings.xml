@@ -10,6 +10,7 @@
     <string name="unknown_user">Unknown user</string>
     <string name="connected">Connected</string>
     <string name="using_exit_node">Using exit node (%s)</string>
+    <string name="disable_exit_node">Disable Exit Node</string>
     <string name="not_connected">Not connected</string>
     <string name="empty" translatable="false"> </string>
     <string name="template" translatable="false">%s</string>

@@ -35,7 +35,7 @@ Tailscale's existing exit-node mechanism is *destination-based*: the chosen
 exit peer gets `0.0.0.0/0` in its WireGuard AllowedIPs, and the rest of the
 data plane just follows AllowedIPs. To override per-app, we need
 *source-based* routing, which doesn't exist in any single layer. It turned
-out to require fixes in **three** layers:
+out to require fixes in **five** layers:
 
 ### 1. The wireguard-go peer-selection hook (the hook we noticed first)
 
@@ -85,6 +85,98 @@ stable IDs in addition to the selected exit node. `LocalBackend` passes
 both `prefs.ExitNodeID()` and the unique set of `prefs.PerAppExitNode()`
 values. Peers in either set retain `/0` in their AllowedIPs.
 
+### 4. BART destination trie /0 disambiguation (the silently-wrong one)
+
+Layer 3 above keeps `/0` in WireGuard AllowedIPs for both the global exit
+*and* every per-app target. That fixes inbound validation, but introduces a
+new outbound bug: wgengine's BART trie (`peerByIPRoute`) — used as the
+destination-routing fallback when our `PeerByIPPacketFunc` callback returns
+`(_, false)` — sees multiple peers claiming `/0`. The trie can't represent
+two peers at the same prefix, so it returns whichever was inserted last,
+non-deterministically. Concretely: with global = Amsterdam and per-app
+Firefox = Amsterdam, Chrome (no per-app rule) was routing through a
+*different* per-app target like London instead of the configured global
+Amsterdam.
+
+**Change:** added an `IsExitNode bool` to `wgcfg.Peer`. `nmcfg.WGCfg`
+sets it only for the peer matching the globally selected `ExitNodeID`
+(per-app targets stay false). In `userspaceEngine.maybeReconfigWireguardLocked`,
+when building the BART trie, any `/0` prefix from a peer with
+`IsExitNode == false` is filtered out. AllowedIPs are untouched, so the
+inbound-validation fix from layer 3 remains intact. The trie now has at
+most one `/0` owner (the real global exit), and the per-app override
+callback handles per-app destinations *before* the trie is ever consulted.
+
+### 5. Netstack passthrough for non-configured apps in per-app-only mode (the longest one)
+
+With layers 1–4, this works:
+
+- global exit set, per-app set: per-app apps route via their target,
+  non-configured apps fall through to the global exit. ✓
+- global exit not set, per-app not set: ordinary Tailscale (tailnet IPs
+  on the tunnel, public traffic via underlying network — the tun never
+  captured `/0` so nothing changed). ✓
+
+But this didn't:
+
+- global exit *not* set, per-app set: tun captures `/0` (layer 2
+  requirement), Firefox routes via its per-app peer (override callback),
+  but Chrome has no per-app rule and no global exit — wireguard's BART
+  trie has no `/0` owner (layer 4 filtered them out), so Chrome's packet
+  is dropped. Chrome can't reach the public Internet.
+
+The user's requirement: in per-app-only mode, non-configured apps should
+still reach the public Internet via the underlying network (LTE/WiFi),
+while keeping tailnet access for things like Termux SSH to a VPS. Vanilla
+Android `VpnService` can't express this — its routes are global to the
+tun interface, and `addAllowedApplication`/`addDisallowedApplication` is
+all-or-nothing per UID. So the only way is to capture `/0` for everyone
+and *userspace-forward* the non-configured apps' public traffic through a
+protected socket that bypasses our own VPN tunnel.
+
+Tailscale's netstack already has the subnet-router code path:
+`acceptTCP`/`acceptUDP` accept inbound connections into gVisor, then
+`forwardTCP`/`forwardUDP` dial the destination via stdlib and proxy bytes.
+What was missing on Android: (a) the dial sockets weren't `protect()`-ed,
+so they'd loop back into wireguard, and (b) nothing was routing
+passthrough packets into netstack in the first place.
+
+**Change** (all in `tailscale/tailscale` fork):
+
+- `LocalBackend.ShouldPassthroughForApp(p *packet.Parsed) bool` — checks
+  the four conditions for passthrough (per-app rules exist, no global
+  exit, dst is non-tailnet/non-loopback/non-subnet-routed,
+  `connowner.Lookup` resolves to an app with no per-app rule).
+- `netstack.Impl.passthroughDecider` — new field, wired automatically
+  from `Start` when LocalBackend is passed. Consulted in
+  `handleLocalPackets` before the existing service-IP switch: if it
+  returns true, the packet is injected into `linkEP.gro` and the tun
+  outbound path stops with `filter.DropSilently`. wireguard never sees
+  these packets.
+- `netstack.forwardTCP` and `forwardUDP` default their egress dial /
+  listen path to `netns.NewDialer` / `netns.Listener` instead of stdlib
+  `net.Dialer` / `net.ListenUDP`. On Android these route through the
+  `controlC` hook in `net/netns/netns_android.go`, which calls
+  `VpnService.protect(fd)` — the socket bypasses our VPN tunnel and uses
+  the underlying default network.
+- `netstack.shouldSendToHost` — extended so that synthesized response
+  packets (src = a public IP, dst = this node's tailnet IP) are sent via
+  `InjectInboundPacketBuffer` to the kernel for local delivery, instead
+  of being looped back into gVisor by `DeliverLoopback`. Without this,
+  the SYN-ACK netstack generates on behalf of the public backend never
+  reaches the originating local app, and connections never establish.
+
+After these changes:
+
+- Chrome (no per-app rule): SYN diverted → netstack accepts → dials
+  `1.2.3.4:443` via protected socket → bytes proxied. Chrome thinks it's
+  talking directly to `1.2.3.4`. Real source IP visible to remote is the
+  device's underlying-network IP.
+- Firefox (per-app = Amsterdam): per-app override callback returns the
+  Amsterdam peer; packet routed via wireguard as before. Unchanged.
+- Termux SSH to `100.x.y.z`: dst is tailnet → `ShouldPassthroughForApp`
+  returns false → normal wireguard path. Unchanged.
+
 ## Files changed
 
 ### `tailscale/tailscale` fork
@@ -98,7 +190,10 @@ values. Peers in either set retain `/0` in their AllowedIPs.
 | `wgengine/wgengine.go` | New `SetPerAppPeerOverrideFunc` method on the `Engine` interface |
 | `wgengine/userspace.go` | `userspaceEngine.perAppPeerOverride` atomic; new method; the single wgdev callback runs override → fast path → BART |
 | `wgengine/watchdog.go` | Pass-through for `SetPerAppPeerOverrideFunc` |
-| `wgengine/wgcfg/nmcfg/nmcfg.go` | `WGCfg` accepts variadic per-app stable IDs; keeps /0 for any peer in either set |
+| `wgengine/wgcfg/nmcfg/nmcfg.go` | `WGCfg` accepts variadic per-app stable IDs; keeps /0 for any peer in either set; sets `cpeer.IsExitNode` only for the global exit |
+| `wgengine/wgcfg/config.go`, `wgengine/wgcfg/wgcfg_clone.go` | `Peer.IsExitNode` field + clone-needs-regeneration check; `Peer.Equal` updated |
+| `wgengine/userspace.go` | BART trie excludes `/0` prefixes from non-exit peers so the destination fallback can't pick a per-app target instead of the global exit |
+| `wgengine/netstack/netstack.go` | `passthroughDecider` hook in `handleLocalPackets`; `forwardTCP`/`forwardUDP` default to `netns.NewDialer`/`netns.Listener` for protected egress; `shouldSendToHost` returns true for synthesized response packets (src=public, dst=local tailnet IP) so the kernel delivers them to the originating app |
 | `net/connowner/connowner.go` | New tiny package: atomic-pointer registry for platforms (Android) to install a flow→app resolver |
 | `ipn/ipnlocal/state_test.go` | `mockEngine` stub for the new interface method |
 
@@ -115,6 +210,8 @@ values. Peers in either set retain `/0` in their AllowedIPs.
 | `android/.../ui/view/PerAppExitNodeView.kt`, `PerAppExitNodePickerView.kt` | New: Compose screens. Overridden apps surface first; picker offers "Use global", "No exit node", and the full tailnet+Mullvad list |
 | `android/.../ui/view/SettingsView.kt`, `viewModel/SettingsViewModel.kt`, `MainActivity.kt` | New nav route and Settings entry |
 | `android/src/main/res/values/strings.xml` | New string resources |
+| `android/.../IPNReceiver.java`, `AndroidManifest.xml`, `App.kt` | "Disable Exit Node" notification action: registers `com.tailscale.ipn.DISABLE_EXIT_NODE` broadcast, surfaces a notification action when an exit node is active and MDM hasn't forced one, enqueues `DisableExitNodeWorker` |
+| `android/.../DisableExitNodeWorker.kt` | New: mirrors the UI's "Disable Exit Node" toggle via `Client.setUseExitNode(false)` so the selected exit node ID is preserved (re-enableable) instead of cleared |
 
 ## How a flow goes through the system
 
@@ -173,26 +270,29 @@ beyond the one-shot logs. Worth pruning before any merge.
 
 ## Known issues / future work
 
-### Receive-side trie collision when per-app exit ≠ global exit
+### Passthrough source IP leaks the device's real public IP
 
-`nmcfg.WGCfg` now keeps `/0` for both the global exit peer and every
-per-app exit peer. WireGuard's AllowedIPs trie can't hold two distinct
-peers at the same `/0` prefix — whichever was inserted last wins both for
-outbound routing fallback and for inbound source-IP validation. Concretely:
-if you set global → peer A and Chrome → peer B (where A ≠ B), responses
-from one of them may get dropped at the receive validator.
+In per-app-only mode, traffic from non-configured apps egresses via the
+device's underlying network — its real public IP is visible to the
+destination. This is *intentional*: the user wanted exactly that ("Non
+configured apps pass-through to global exit node, or none"). But it's
+worth being explicit about: per-app routing is *not* a privacy boundary
+for non-configured apps when no global exit is set.
 
-For our outbound use case, our `PeerByIPPacketFunc` override runs *before*
-the AllowedIPs trie, so the outbound side is unaffected. The inbound
-collision is the real issue.
+### Passthrough is TCP/UDP only
 
-A clean fix would use wireguard-go's per-peer `testAllowedIP` hook
-(currently test-named but functionally usable) to install a "trust any
-source from this peer" override on per-app exit peers. That's invasive
-enough to skip until you hit the case.
+`connowner.Lookup` needs a 5-tuple, so ICMP from non-configured apps to
+public destinations (e.g. `ping 8.8.8.8` from Chrome's dev tools, not
+that anything does this) still drops at wireguard. Acceptable for now.
 
-Workaround in the meantime: pick "no global exit node" and route everything
-through per-app rules, or set global and per-app to the same node.
+### `connowner.Lookup` failure means drop, not passthrough
+
+If `ConnectivityManager.getConnectionOwnerUid` returns `INVALID_UID`
+(short-lived flow that already closed by the time the first packet
+reaches our hook), `ShouldPassthroughForApp` returns false and the
+packet falls through to wireguard, which drops it. Erring on the side of
+"don't passthrough" avoids accidentally leaking traffic from a flow we
+*would* have routed via a per-app rule if we'd resolved it in time.
 
 ### Logging is verbose
 
