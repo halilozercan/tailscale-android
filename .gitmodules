@@ -1,0 +1,4 @@
+[submodule "third_party/tailscale"]
+	path = third_party/tailscale
+	url = git@github.com:halilozercan/tailscale.git
+	branch = per-app-exit-node

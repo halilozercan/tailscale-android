@@ -8,7 +8,7 @@ require (
 	tailscale.com v1.99.0-pre.0.20260527224844-db60aa8eca34
 )
 
-replace tailscale.com => ../tailscale
+replace tailscale.com => ./third_party/tailscale
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
