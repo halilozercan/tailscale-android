@@ -353,190 +353,11 @@ flow if anything goes wrong.
 
 ## Keeping the fork current with upstream
 
-You'll want to pull from upstream periodically — Tailscale evolves quickly
-and the fork rots fast (the netmap, prefs, and wgengine packages get
-substantive changes most months). Here's the procedure that works.
-
-### Mental model
-
-There are **two repos, both forked**, and **one pin** that couples them:
-
-- `../tailscale` carries the feature commits on branch `per-app-exit-node`.
-  It needs to be rebased on top of upstream `tailscale.com/main`.
-- `tailscale-android` carries its own feature commits (UI, JNI shim,
-  prefs DTOs) **plus** a `replace tailscale.com => ../tailscale` directive
-  in `go.mod`. Without that replace, you'd need to publish the tailscale
-  fork somewhere for go.mod to find it.
-- The `tailscale.com vX.Y.Z-pre.0.YYYY...` pin in `tailscale-android/go.mod`
-  becomes mostly cosmetic once the replace is in place, but you'll still
-  want to keep it close to the upstream commit your tailscale branch is
-  rebased on, so an external `go mod tidy` doesn't surprise you with
-  unrelated version skew.
-
-The friction points, in order of severity:
-
-1. `ipn/prefs.go` — fields are added and removed every few weeks. Likely
-   conflicts on the `Prefs` struct and `MaskedPrefs`.
-2. `ipn/ipnlocal/local.go` — huge file with many active hands. The
-   `routerConfigLocked` exit-node block and the `lookupPeerByIP`
-   registration site are both in active churn zones.
-3. `wgengine/wgcfg/nmcfg/nmcfg.go` — less active, but `WGCfg`'s signature
-   is the kind of thing upstream might also change for their own reasons.
-4. Generated files (`ipn_clone.go`, `ipn_view.go`) — **never resolve these
-   manually**. After rebase, re-run `go generate ./ipn/` and let it
-   regenerate from the rebased source.
-5. `tailscale-android` Kotlin/Go files — generally low-churn, but
-   `MainActivity.kt`'s navigation block and `IPNService.kt` get touched
-   when upstream adds settings.
-
-### Procedure: rebase tailscale (the Go fork)
-
-```bash
-cd /home/halilibo/StudioProjects/tailscale
-
-# 1. Add upstream once (idempotent; harmless if already there)
-git remote get-url upstream >/dev/null 2>&1 || \
-  git remote add upstream https://github.com/tailscale/tailscale.git
-
-# 2. Fetch
-git fetch upstream
-
-# 3. Make sure you're on the feature branch
-git checkout per-app-exit-node
-
-# 4. Rebase. Conflicts are likely — see "expected conflicts" below.
-git rebase upstream/main
-```
-
-When rebase stops with conflicts:
-
-```bash
-# Inspect what's in conflict
-git status
-
-# Edit the conflicted files. The hot ones in this fork:
-#   ipn/prefs.go                          (Prefs / MaskedPrefs)
-#   ipn/ipnlocal/local.go                 (routerConfigLocked + registration)
-#   wgengine/wgcfg/nmcfg/nmcfg.go         (WGCfg signature)
-#   wgengine/userspace.go                 (perAppPeerOverride atomic + closure)
-#   wgengine/wgengine.go                  (Engine interface)
-#   ipn/ipnlocal/state_test.go            (mockEngine stub)
-#
-# For ipn_clone.go and ipn_view.go: don't hand-resolve. Accept
-# either side, then run `go generate ./ipn/` after the rebase finishes
-# and let codegen overwrite them. If they conflict mid-rebase, easiest:
-git checkout --theirs ipn/ipn_clone.go ipn/ipn_view.go
-git add ipn/ipn_clone.go ipn/ipn_view.go
-
-# Once each commit's conflicts are resolved:
-git add <resolved files>
-git rebase --continue
-```
-
-After the rebase completes:
-
-```bash
-# Regenerate the view/clone code from the rebased prefs.go
-go generate ./ipn/
-
-# Smoke-build everything
-go build ./...
-
-# Run the ipn + wgengine tests
-go test ./ipn/... ./wgengine/... -count=1
-```
-
-If `TestPrefsEqual` fails complaining the handled list is out of sync,
-that's the `prefs_test.go` field list — make sure
-`"PerAppExitNode"` is in the `prefsHandles` slice (a previous resolve may
-have dropped it).
-
-### Procedure: rebase tailscale-android
-
-```bash
-cd /home/halilibo/StudioProjects/tailscale-android
-
-# 1. Add upstream once
-git remote get-url upstream >/dev/null 2>&1 || \
-  git remote add upstream https://github.com/tailscale/tailscale-android.git
-
-# 2. Fetch
-git fetch upstream
-
-# 3. Rebase your branch (substitute the branch you've been working on; if
-#    you've been committing on main, use main)
-git rebase upstream/main
-```
-
-Expected conflict files in this repo:
-
-- `go.mod` — upstream may have bumped the `tailscale.com` pin. Take
-  upstream's version *and* keep the `replace tailscale.com => ../tailscale`
-  line at the bottom.
-- `libtailscale/interfaces.go` — if upstream added methods to `IPNService`,
-  you need to integrate. Keep our `LookupPackageByFlow` method.
-- `libtailscale/backend.go` — the VPN-start/stop block where we register
-  `connowner.SetLookupFunc`. Upstream may have changed the block's
-  structure; reapply our two `connowner.SetLookupFunc(...)` calls in the
-  same place as the existing `netns.SetAndroidProtectFunc` calls.
-- `android/.../IPNService.kt` — if upstream changed the class, reapply
-  `lookupPackageByFlow` and its imports.
-- `android/.../ui/model/Ipn.kt` — if upstream added prefs fields, our
-  `PerAppExitNode` lines on `Prefs` and `MaskedPrefs` (and `deepCopy`)
-  need to coexist with theirs.
-- `android/.../ui/view/SettingsView.kt`, `viewModel/SettingsViewModel.kt`,
-  `MainActivity.kt` — the navigation and Settings-list wiring. Upstream
-  often touches these when adding new settings.
-- `android/src/main/res/values/strings.xml` — append-only conflicts; trivial.
-
-### Procedure: bumping the pin after rebasing tailscale
-
-Once `../tailscale` is rebased onto a newer upstream commit, update the
-pin in `tailscale-android/go.mod` so that `go mod tidy` (and CI, and any
-contributor not using the local replace) sees a consistent version:
-
-```bash
-cd /home/halilibo/StudioProjects/tailscale-android
-
-# Find the commit + timestamp for the new tailscale HEAD
-cd ../tailscale && COMMIT=$(git rev-parse HEAD) DATE=$(git show -s --format=%cd --date=format:%Y%m%d%H%M%S HEAD) && echo "$DATE-${COMMIT:0:12}"
-cd ../tailscale-android
-
-# Then edit go.mod manually:
-#   tailscale.com v1.97.0-pre.0.<DATE>-<COMMITSHORT>
-# Or use `go get tailscale.com@$COMMIT` — but that needs the fork to be
-# pushed to a fetchable remote. With only a local replace it's hand-edit.
-
-# Sync the indirect deps to match upstream
-go mod tidy
-```
-
-The `replace` directive will keep your build pointing at the local clone
-regardless of what version string sits in `require`. The version string
-just keeps `go.sum` and downstream tooling happy.
-
-### Verification after a rebase
-
-A full pass should be:
-
-```bash
-# In ../tailscale
-cd /home/halilibo/StudioProjects/tailscale
-go build ./... && go test ./ipn/... ./wgengine/... -count=1
-
-# In tailscale-android — full clean rebuild
-cd /home/halilibo/StudioProjects/tailscale-android
-rm -f libgojni.so.stripped libgojni.so.unstripped libgojni.so.debug \
-      android/libs/libtailscale.aar android/libs/libtailscale_unstripped.aar
-ANDROID_HOME=/home/halilibo/Android/Sdk make tailscale-debug
-
-# Install and re-run the testing flow from the previous section
-adb install -r tailscale-debug.apk
-```
-
-If you skipped `go generate ./ipn/` during the rebase, the build will
-usually catch it with a "PerAppExitNode is undefined" or similar — that's
-a sign to go back and regenerate.
+The full procedure (clone setup, remote layout, rebase steps for both
+forks, submodule pin bumps, verification) lives in
+[`FORK_MAINTENANCE.md`](FORK_MAINTENANCE.md). This section just calls
+out the parts of the upstream surface that are most likely to break
+this specific feature on rebase.
 
 ### Watch list for upstream changes that need extra attention
 
@@ -549,21 +370,41 @@ a sign to go back and regenerate.
   (e.g. they recently took flags as `netmap.WGConfigFlags`). Our
   variadic `perAppExitNodes ...tailcfg.StableNodeID` should sit at the
   end of any new signature.
-- **`routerConfigLocked` exit-node block restructure.** If upstream moves
-  the "should we add /0 to routes?" logic into a helper or changes its
-  condition shape, port the `|| prefs.PerAppExitNode().Len() > 0` clause
-  to wherever it ends up.
+- **`routerConfigLocked` exit-node block restructure.** If upstream
+  moves the "should we add /0 to routes?" logic into a helper or
+  changes its condition shape, port the `|| prefs.PerAppExitNode().Len()
+  > 0` clause to wherever it ends up.
 - **`nmcfg.WGCfg` AllowedIPs filtering.** Same: if upstream changes how
-  exit-node /0 stripping works, port our `defaultRouteOK` helper.
-- **netstack `handleLocalPackets`.** If upstream changes this to capture
-  more outbound traffic (e.g. they push more "intercept here in
-  userspace" cases), our packets might stop reaching wireguard. If
-  things suddenly stop working after a rebase and the diagnostic logs
-  show `wgdev callback fired first time` missing again, this is the
-  first place to look.
+  exit-node /0 stripping works, port our `defaultRouteOK` helper *and*
+  the `cpeer.IsExitNode = peer.StableID() == exitNode` assignment.
+- **`wgcfg.Peer` struct fields.** We added `IsExitNode bool`; the
+  generated `wgcfg_clone.go` has a `_PeerCloneNeedsRegeneration`
+  sentinel that must list it too. If the regeneration check fails the
+  build, re-run `go generate ./wgengine/wgcfg/`.
+- **`wgengine.maybeReconfigWireguardLocked` BART trie construction.**
+  Our `/0`-skip-when-`!IsExitNode` filter has to survive any refactor
+  that rebuilds the trie. If the rebuilt trie ever stops using a `for
+  _, p := range full.Peers` loop directly, port the filter to the new
+  iteration site.
+- **netstack `handleLocalPackets`.** Two things need to survive:
+  (1) the `passthroughDecider` early-exit at the top of the function,
+  (2) the existing service-IP / 4via6 switch below it. If upstream
+  refactors the function, both have to land in equivalent positions.
+- **netstack `forwardTCP` / `forwardUDP` dial paths.** We default the
+  dialer to `netns.NewDialer` (TCP) and listener to `netns.Listener`
+  (UDP) so Android's `protect()` gets called on the egress socket. If
+  upstream changes how these forwarders are constructed, reapply the
+  netns wiring — otherwise per-app-only mode silently loops back into
+  wireguard.
+- **netstack `shouldSendToHost`.** Our IPv4 and IPv6 cases append a
+  `if ns.isLocalIP(dstIP) && !ns.isLocalIP(srcIP) { return true }`
+  block so passthrough response packets reach the kernel via
+  `InjectInboundPacketBuffer` instead of being looped back into gVisor
+  by `DeliverLoopback`. Without it, established TCP connections from
+  non-configured apps will silently fail handshake. If upstream
+  restructures `shouldSendToHost`, this is critical to reapply.
 
 If a future rebase ever drops our diagnostic log lines or atomic
 counters, that's fine — they're scaffolding, not load-bearing. The
 load-bearing changes are all listed under "Files changed" near the top
 of this doc.
-
