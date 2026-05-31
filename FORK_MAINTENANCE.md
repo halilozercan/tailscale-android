@@ -32,26 +32,50 @@ client to a newer Go-fork commit is an explicit step (see below).
 
 ## Remotes
 
-Both repos have two remotes:
+The two repos have **different** remote layouts, because the submodule is
+cloned from a personal-fork URL (see `.gitmodules`) while the parent is a
+plain clone of upstream. Don't assume they match.
 
-| Remote   | URL                                                  | Purpose                  |
-|----------|------------------------------------------------------|--------------------------|
-| `origin` | `https://github.com/tailscale/<repo>(.git)`          | Pull from upstream       |
-| `halil`  | `git@github.com:halilozercan/<repo>.git`             | Push personal feature work |
+### Parent (`tailscale-android`)
 
-`origin` is intentionally pointed at upstream so `git fetch origin` and
-`git rebase origin/main` keep working without thinking. Pushes always go
-to `halil`.
+| Remote   | URL                                                | Purpose                    |
+|----------|----------------------------------------------------|----------------------------|
+| `origin` | `https://github.com/tailscale/tailscale-android/`  | Pull from upstream         |
+| `halil`  | `git@github.com:halilozercan/tailscale-android.git`| Push personal feature work |
 
-If a clone is missing the `halil` remote, add it:
+Here `origin` *is* upstream, so `git fetch origin` / `git rebase
+origin/main` sync against upstream with no extra remote. There is no
+separate `upstream` remote.
+
+### Submodule (`third_party/tailscale`)
+
+| Remote     | URL                                          | Purpose                    |
+|------------|----------------------------------------------|----------------------------|
+| `origin`   | `git@github.com:halilozercan/tailscale.git`  | Personal fork (clone URL)  |
+| `halil`    | `git@github.com:halilozercan/tailscale.git`  | Personal fork (push alias) |
+| `upstream` | `https://github.com/tailscale/tailscale.git` | Pull from upstream core    |
+
+Here `origin` points at the **personal fork**, not upstream — that's the
+URL in `.gitmodules`, and `git submodule update` names it `origin`. So
+upstream lives under a separate `upstream` remote, and you rebase against
+`upstream/main` (not `origin/main`). `halil` is a convenience alias for
+the same fork as `origin`, so the push commands below read consistently
+across both repos.
+
+In both repos, **pushes always go to `halil`** and upstream syncs pull
+from whichever remote points at upstream (parent: `origin`; submodule:
+`upstream`).
+
+If a clone is missing these remotes, add them:
 
 ```bash
-# In the tailscale-android repo
+# In the tailscale-android repo (origin already = upstream)
 git remote add halil git@github.com:halilozercan/tailscale-android.git
 
-# In the submodule
+# In the submodule (origin = personal fork from .gitmodules)
 cd third_party/tailscale
-git remote add halil git@github.com:halilozercan/tailscale.git
+git remote add halil    git@github.com:halilozercan/tailscale.git
+git remote add upstream https://github.com/tailscale/tailscale.git
 ```
 
 ## Initial setup (fresh clone)
@@ -59,8 +83,16 @@ git remote add halil git@github.com:halilozercan/tailscale.git
 ```bash
 git clone git@github.com:halilozercan/tailscale-android.git
 cd tailscale-android
+git checkout per-app-exit-node          # the feature work lives here, not main
 git submodule update --init --recursive
 ```
+
+The feature work lives on the **`per-app-exit-node`** branch in both the
+parent and the submodule; `main` in each is a clean mirror of upstream.
+A fresh clone lands on `main`, so check out the feature branch before
+building. (The submodule is pinned by commit, so it checks out the right
+Go-fork revision regardless of branch — see "Submodule HEAD detached"
+under Common pitfalls if you want to develop inside it.)
 
 `--init` populates the submodule's working tree from the URL in
 `.gitmodules`; `--recursive` is defensive in case the Go fork ever gains
@@ -112,15 +144,27 @@ git rebase upstream/main
    changes the signature, reapply both.
 4. `wgengine/wgcfg/config.go`, `wgengine/wgcfg/wgcfg_clone.go` — the
    `IsExitNode bool` field on `Peer` plus the corresponding clone
-   regeneration sentinel.
+   regeneration sentinel. Also update `wgengine/wgcfg/config_test.go`:
+   `TestPeerEqual` reflects over `Peer`'s fields against a hardcoded
+   allowlist, so `"IsExitNode"` must be in that `case` list or the test
+   fails with "Have you added field … to Peer.Equal?".
 5. `wgengine/userspace.go` — the BART trie /0 filter and the
    `perAppPeerOverride` atomic + closure.
-6. `wgengine/wgengine.go`, `wgengine/watchdog.go` — `Engine` interface
-   additions for `SetPerAppPeerOverrideFunc`.
+6. `wgengine/wgengine.go` — `Engine` interface addition for
+   `SetPerAppPeerOverrideFunc`. **Note:** upstream removed the Engine
+   watchdog (commit `2b338dd6a`), so `wgengine/watchdog.go` is gone. On
+   rebase you'll get a modify/delete conflict there — resolve it with
+   `git rm wgengine/watchdog.go`; the real method lives on
+   `userspaceEngine` (userspace.go) and the interface, not a wrapper.
 7. `wgengine/netstack/netstack.go` — `passthroughDecider` field +
    wiring, `netns.NewDialer`/`netns.Listener` in `forwardTCP` /
    `forwardUDP`, and the `shouldSendToHost` block that returns true for
-   `src=non-local, dst=local-tailnet-IP` packets.
+   `dst=local-tailnet-IP` with a **genuine public source**
+   (`!ns.isLocalIP(src) && !tsaddr.IsTailscaleIP(src)`). The
+   `!tsaddr.IsTailscaleIP` guard is load-bearing: without it the
+   `TestShouldSendToHost/other_4via6_to_local` case fails, because a
+   4via6 source (`fd7a:115c:a1e0::/48`) would be wrongly diverted to the
+   host instead of staying on WireGuard.
 8. `ipn/ipnlocal/state_test.go` — `mockEngine` must stub the new
    `SetPerAppPeerOverrideFunc`.
 9. Generated files `ipn/ipn_clone.go` and `ipn/ipn_view.go` — **never
@@ -167,15 +211,27 @@ push.
 
 ## Routine sync: pulling upstream into the Android client
 
+In the parent repo `origin` already points at upstream, so sync against
+`origin/main` directly — no `upstream` remote needed here (unlike the
+submodule).
+
 ```bash
 cd /path/to/tailscale-android   # back out of any submodule
 
-git remote get-url upstream >/dev/null 2>&1 || \
-  git remote add upstream https://github.com/tailscale/tailscale-android.git
-
-git fetch upstream
-git rebase upstream/main
+git fetch origin
+git checkout per-app-exit-node
+git rebase origin/main
 ```
+
+After the rebase, push the feature branch (history was rewritten):
+
+```bash
+git push --force-with-lease halil per-app-exit-node
+```
+
+`main` stays a clean mirror of upstream — don't put feature commits on
+it. If it has drifted, reset it: `git fetch origin && git branch -f main
+origin/main`.
 
 ### Expected conflict zones
 
